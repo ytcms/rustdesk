@@ -394,16 +394,15 @@ mod cpal_impl {
         let host = cpal::default_host();
 
         // 获取麦克风设备
-        let audio_input = super::get_audio_input();
-        let mic_device = get_audio_input(&audio_input);
-        log::info!("Mic device: {}", mic_device.name().unwrap_or("Unknown"));
+        let mic_device = host.default_input_device().ok_or(anyhow!("No mic device"))?;
+//         log::info!("Mic device: {}", mic_device.name().unwrap_or("Unknown"));
 
         // 获取默认输出设备（用于环回采集）
 //         let loopback_device = host.default_output_device().ok_or(anyhow!("No loopback device"))?;
-         let loopback_device = HOST
+         let loopback_device = host
             .default_output_device()
             .with_context(|| "Failed to get default output device for loopback")?;
-        log::info!("Loopback device: {}", loopback_device.name().unwrap_or("Unknown"));
+//         log::info!("Loopback device: {}", loopback_device.name().unwrap_or("Unknown"));
 
         // 获取设备配置
         let mic_config = mic_device.default_input_config().map_err(|e| anyhow!(e))?;
