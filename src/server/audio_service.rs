@@ -387,126 +387,166 @@ mod cpal_impl {
 
     #[cfg(windows)]
     fn play(sp: &GenericService) -> ResultType<(Box<dyn StreamTrait>, Arc<Message>)> {
-        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-        use std::collections::VecDeque;
-        use std::sync::{Arc, Mutex};
+        use cpal::SampleFormat::*;
 
-        let host = cpal::default_host();
+        // 获取麦克风设备与系统音频输出设备
+        let (mic_device, mic_config) = get_mic_device()?;
+        let (loopback_device, loopback_config) = get_loopback_device()?;
 
-        // 获取麦克风设备
-        let mic_device = host.default_input_device().ok_or(anyhow!("No mic device"))?;
-//         log::info!("Mic device: {}", mic_device.name().unwrap_or("Unknown"));
-
-        // 获取默认输出设备（用于环回采集）
-//         let loopback_device = host.default_output_device().ok_or(anyhow!("No loopback device"))?;
-         let loopback_device = host
-            .default_output_device()
-            .with_context(|| "Failed to get default output device for loopback")?;
-//         log::info!("Loopback device: {}", loopback_device.name().unwrap_or("Unknown"));
-
-        // 获取设备配置
-        let mic_config = mic_device.default_input_config().map_err(|e| anyhow!(e))?;
-        let loop_config = loopback_device.default_input_config().map_err(|e| anyhow!(e))?;
-
-        log::info!("Mic config: {:?}", mic_config);
-        log::info!("Loop config: {:?}", loop_config);
-
-        // 统一使用 48000Hz 立体声
-        let sample_rate = 48000u32;
-        let channels = 2u16;
-        let frame_size = sample_rate as usize / 100; // 10ms
-
-        // 创建音频缓冲区
-        let mic_buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
-        let loop_buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
-
-        // 创建麦克风输入流
-        let mic_buffer_clone = mic_buffer.clone();
-        let mic_stream = mic_device.build_input_stream(
-            &mic_config.into(),
-            move |data: &[f32], _| {
-                mic_buffer_clone.lock().unwrap().extend(data);
-            },
-            |err| log::error!("Mic stream error: {}", err),
-            None,
-        )?;
-
-        // 创建环回输入流
-        let loop_buffer_clone = loop_buffer.clone();
-        let loop_stream = loopback_device.build_input_stream(
-            &loop_config.into(),
-            move |data: &[f32], _| {
-                loop_buffer_clone.lock().unwrap().extend(data);
-            },
-            |err| log::error!("Loopback stream error: {}", err),
-            None,
-        )?;
-
-        // 启动两个流
-        mic_stream.play()?;
-        loop_stream.play()?;
-
-        log::info!("Started mic and loopback streams");
-
-        // 创建混音线程
         let sp = sp.clone();
+
+        // 统一采样率和声道数
+        let sample_rate_0 = mic_config.sample_rate().0;
+        let sample_rate = if sample_rate_0 < 12000 {
+           8000
+        } else if sample_rate_0 < 16000 {
+           12000
+        } else if sample_rate_0 < 24000 {
+           16000
+        } else if sample_rate_0 < 48000 {
+           24000
+        } else {
+           48000
+        };
+
+        let ch = if mic_config.channels() > 1 { Stereo } else { Mono };
+        let encode_channel = ch;
+
+        // 缓冲区共享
+        let mic_buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+        let loopback_buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+
+        // 构建麦克风输入流
+        let mic_stream = build_input_stream_with_buffer::<i16>(
+           mic_device,
+           &mic_config,
+           sp.clone(),
+           sample_rate,
+           encode_channel,
+           mic_buffer.clone(),
+        )?;
+
+        // 构建系统音频输入流（loopback）
+        let loopback_stream = build_input_stream_with_buffer::<f32>(
+           loopback_device,
+           &loopback_config,
+           sp.clone(),
+           sample_rate,
+           encode_channel,
+           loopback_buffer.clone(),
+        )?;
+
+        // 启动音频流
+        mic_stream.play()?;
+        loopback_stream.play()?;
+
+        // 启动混音线程
+        start_mixing_thread(mic_buffer, loopback_buffer, sp, sample_rate, encode_channel)?;
+
+        Ok((Box::new(mix_stream), Arc::new(create_format_msg(sample_rate, ch as _))))
+    }
+
+    fn get_mic_device() -> ResultType<(Device, SupportedStreamConfig)> {
+        let audio_input = super::get_audio_input();
+        let device = if !audio_input.is_empty() {
+            HOST.devices()?.find(|d| d.name().unwrap_or_default() == audio_input)
+                .with_context(|| "Specified mic device not found")?
+        } else {
+            HOST.default_input_device().context("No mic device available")?
+        };
+        let config = device.default_input_config()?;
+        Ok((device, config))
+    }
+
+    #[cfg(windows)]
+    fn get_loopback_device() -> ResultType<(Device, SupportedStreamConfig)> {
+        let device = HOST.default_output_device().context("No output device for loopback")?;
+        let config = device.default_output_config()?;
+        Ok((device, config))
+    }
+
+    fn build_input_stream_with_buffer<T>(
+        device: Device,
+        config: &SupportedStreamConfig,
+        sp: GenericService,
+        sample_rate: u32,
+        encode_channel: magnum_opus::Channels,
+        buffer: Arc<Mutex<VecDeque<f32>>>,
+    ) -> ResultType<cpal::Stream>
+    where
+        T: cpal::SizedSample + dasp::sample::ToSample<f32>,
+    {
+        let err_fn = |err| log::error!("Stream error: {}", err);
+        let device_channel = config.channels();
+        let frame_size = sample_rate as usize / 100; // 10ms
+        let rechannel_len = frame_size * encode_channel as usize;
+
+        let stream_config = StreamConfig {
+            channels: device_channel,
+            sample_rate: config.sample_rate(),
+            buffer_size: BufferSize::Default,
+        };
+
+        let stream = device.build_input_stream(
+            &stream_config,
+            move |data: &[T], _: &InputCallbackInfo| {
+                let samples: Vec<f32> = data.iter().map(|s| s.to_sample()).collect();
+                buffer.lock().unwrap().extend(samples);
+            },
+            err_fn,
+            None,
+        )?;
+
+        Ok(stream)
+    }
+
+    fn start_mixing_thread(
+        mic_buffer: Arc<Mutex<VecDeque<f32>>>,
+        loopback_buffer: Arc<Mutex<VecDeque<f32>>>,
+        sp: GenericService,
+        sample_rate: u32,
+        encode_channel: magnum_opus::Channels,
+    ) -> ResultType<()> {
         std::thread::spawn(move || {
-            let mut encoder = match Encoder::new(sample_rate, magnum_opus::Channels::Stereo, magnum_opus::Application::LowDelay) {
-                Ok(enc) => enc,
-                Err(e) => {
-                    log::error!("Failed to create encoder: {}", e);
-                    return;
-                }
-            };
+            let mut encoder = Encoder::new(sample_rate, encode_channel, LowDelay).unwrap();
+            let frame_size = sample_rate as usize / 100; // 10ms
+            let running = Arc::new(AtomicBool::new(true));
 
-            let mut frame_count = 0;
-            log::info!("Mixing thread started");
+            while running.load(Ordering::Relaxed) {
+                let mut mic_data = vec![];
+                let mut loopback_data = vec![];
 
-            loop {
-                let mut mic_data = vec![0.0; frame_size];
-                let mut loop_data = vec![0.0; frame_size];
-
-                // 从缓冲区获取数据
                 {
                     let mut mic_buf = mic_buffer.lock().unwrap();
-                    for i in 0..frame_size {
-                        mic_data[i] = mic_buf.pop_front().unwrap_or(0.0);
+                    if mic_buf.len() >= frame_size {
+                        mic_data = mic_buf.drain(..frame_size).collect();
                     }
 
-                    let mut loop_buf = loop_buffer.lock().unwrap();
-                    for i in 0..frame_size {
-                        loop_data[i] = loop_buf.pop_front().unwrap_or(0.0);
+                    let mut loop_buf = loopback_buffer.lock().unwrap();
+                    if loop_buf.len() >= frame_size {
+                        loopback_data = loop_buf.drain(..frame_size).collect();
                     }
                 }
 
-                // 调试信息：每100帧打印一次
-                if frame_count % 100 == 0 {
-                    let mic_sum: f32 = mic_data.iter().map(|x| x.abs()).sum();
-                    let loop_sum: f32 = loop_data.iter().map(|x| x.abs()).sum();
-                    log::info!("Frame {}: mic_sum={:.6}, loop_sum={:.6}", frame_count, mic_sum, loop_sum);
+                if mic_data.is_empty() && loopback_data.is_empty() {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
                 }
-                frame_count += 1;
 
-                // 混音处理
-                let mixed_data: Vec<f32> = if loop_data.iter().map(|x| x.abs()).sum::<f32>() < 0.001 {
-                    // 环回数据太小，只发送麦克风
-                    mic_data
-                } else {
-                    // 正常混音：(mic + loop) / 2
-                    mic_data.iter().zip(loop_data.iter()).map(|(a, b)| (*a + *b) / 2.0).collect()
+                let mixed: Vec<f32> = match (mic_data.get(..), loopback_data.get(..)) {
+                    (Some(m), Some(l)) => m.iter().zip(l).map(|(&a, &b)| (a + b) / 2.0).collect(),
+                    (Some(m), None) => m.to_vec(),
+                    (None, Some(l)) => l.to_vec(),
+                    _ => continue,
                 };
 
-                // 发送混音后的数据
-                send_f32(&mixed_data, &mut encoder, &sp);
-
-                // 10ms 间隔
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                send_f32(&mixed, &mut encoder, &sp);
             }
         });
 
-        // 返回麦克风流（用于管理生命周期）
-        Ok((Box::new(mic_stream), Arc::new(create_format_msg(sample_rate, channels))))
+        Ok(())
     }
+
 
     fn build_input_stream<T>(
         device: cpal::Device,
