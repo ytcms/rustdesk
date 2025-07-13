@@ -444,7 +444,7 @@ mod cpal_impl {
         // 启动混音线程
         start_mixing_thread(mic_buffer, loopback_buffer, sp, sample_rate, encode_channel)?;
 
-        Ok((Box::new(), Arc::new(create_format_msg(sample_rate, ch as _))))
+        Ok((Box::new(mic_stream), Arc::new(create_format_msg(sample_rate, ch as _))))
     }
 
     fn get_mic_device() -> ResultType<(Device, SupportedStreamConfig)> {
