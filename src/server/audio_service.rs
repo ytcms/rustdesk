@@ -25,6 +25,8 @@ static RESTARTING: AtomicBool = AtomicBool::new(false);
 
 lazy_static::lazy_static! {
     static ref VOICE_CALL_INPUT_DEVICE: Arc::<Mutex::<Option<String>>> = Default::default();
+    static ref INPUT_BUFFER_1: Arc<Mutex<std::collections::VecDeque<f32>>> = Default::default(); // 麦克风
+    static ref INPUT_BUFFER_2: Arc<Mutex<std::collections::VecDeque<f32>>> = Default::default(); // 系统音频
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -418,24 +420,52 @@ mod cpal_impl {
         let loopback_buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
 
         // 构建麦克风输入流
-        let mic_stream = build_input_stream_with_buffer::<i16>(
-           mic_device,
-           &mic_config,
-           sp.clone(),
-           sample_rate,
-           encode_channel,
-           mic_buffer.clone(),
-        )?;
+//         let mic_stream = build_input_stream_with_buffer::<i16>(
+//            mic_device,
+//            &mic_config,
+//            sp.clone(),
+//            sample_rate,
+//            encode_channel,
+//            mic_buffer.clone(),
+//         )?;
+
+        let mic_stream = match mic_config.sample_format() {
+           I8 => build_input_stream::<i8>(mic_device, &mic_config, sp, sample_rate, ch)?,
+           I16 => build_input_stream::<i16>(mic_device, &mic_config, sp, sample_rate, ch)?,
+           I32 => build_input_stream::<i32>(mic_device, &mic_config, sp, sample_rate, ch)?,
+           I64 => build_input_stream::<i64>(mic_device, &mic_config, sp, sample_rate, ch)?,
+           U8 => build_input_stream::<u8>(mic_device, &mic_config, sp, sample_rate, ch)?,
+           U16 => build_input_stream::<u16>(mic_device, &mic_config, sp, sample_rate, ch)?,
+           U32 => build_input_stream::<u32>(mic_device, &mic_config, sp, sample_rate, ch)?,
+           U64 => build_input_stream::<u64>(mic_device, &mic_config, sp, sample_rate, ch)?,
+           F32 => build_input_stream::<f32>(mic_device, &mic_config, sp, sample_rate, ch)?,
+           F64 => build_input_stream::<f64>(mic_device, &mic_config, sp, sample_rate, ch)?,
+           f => bail!("unsupported audio format: {:?}", f),
+        };
+
 
         // 构建系统音频输入流（loopback）
-        let loopback_stream = build_input_stream_with_buffer::<f32>(
-           loopback_device,
-           &loopback_config,
-           sp.clone(),
-           sample_rate,
-           encode_channel,
-           loopback_buffer.clone(),
-        )?;
+//         let loopback_stream = build_input_stream_with_buffer::<f32>(
+//            loopback_device,
+//            &loopback_config,
+//            sp.clone(),
+//            sample_rate,
+//            encode_channel,
+//            loopback_buffer.clone(),
+//         )?;
+        let loopback_stream = match loopback_config.sample_format() {
+           I8 => build_input_stream::<i8>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
+           I16 => build_input_stream::<i16>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
+           I32 => build_input_stream::<i32>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
+           I64 => build_input_stream::<i64>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
+           U8 => build_input_stream::<u8>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
+           U16 => build_input_stream::<u16>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
+           U32 => build_input_stream::<u32>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
+           U64 => build_input_stream::<u64>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
+           F32 => build_input_stream::<f32>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
+           F64 => build_input_stream::<f64>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
+           f => bail!("unsupported audio format: {:?}", f),
+        };
 
         // 启动音频流
         mic_stream.play()?;
