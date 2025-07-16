@@ -420,52 +420,24 @@ mod cpal_impl {
         let loopback_buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
 
         // 构建麦克风输入流
-//         let mic_stream = build_input_stream_with_buffer::<i16>(
-//            mic_device,
-//            &mic_config,
-//            sp.clone(),
-//            sample_rate,
-//            encode_channel,
-//            mic_buffer.clone(),
-//         )?;
-
-        let mic_stream = match mic_config.sample_format() {
-           I8 => build_input_stream::<i8>(mic_device, &mic_config, sp, sample_rate, ch)?,
-           I16 => build_input_stream::<i16>(mic_device, &mic_config, sp, sample_rate, ch)?,
-           I32 => build_input_stream::<i32>(mic_device, &mic_config, sp, sample_rate, ch)?,
-           I64 => build_input_stream::<i64>(mic_device, &mic_config, sp, sample_rate, ch)?,
-           U8 => build_input_stream::<u8>(mic_device, &mic_config, sp, sample_rate, ch)?,
-           U16 => build_input_stream::<u16>(mic_device, &mic_config, sp, sample_rate, ch)?,
-           U32 => build_input_stream::<u32>(mic_device, &mic_config, sp, sample_rate, ch)?,
-           U64 => build_input_stream::<u64>(mic_device, &mic_config, sp, sample_rate, ch)?,
-           F32 => build_input_stream::<f32>(mic_device, &mic_config, sp, sample_rate, ch)?,
-           F64 => build_input_stream::<f64>(mic_device, &mic_config, sp, sample_rate, ch)?,
-           f => bail!("unsupported audio format: {:?}", f),
-        };
-
+        let mic_stream = build_input_stream_with_buffer_generic(
+            mic_device,
+            &mic_config,
+            sp.clone(),
+            sample_rate,
+            encode_channel,
+            mic_buffer.clone(),
+        )?;
 
         // 构建系统音频输入流（loopback）
-//         let loopback_stream = build_input_stream_with_buffer::<f32>(
-//            loopback_device,
-//            &loopback_config,
-//            sp.clone(),
-//            sample_rate,
-//            encode_channel,
-//            loopback_buffer.clone(),
-//         )?;
-        let loopback_stream = match loopback_config.sample_format() {
-           I8 => build_input_stream::<i8>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
-           I16 => build_input_stream::<i16>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
-           I32 => build_input_stream::<i32>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
-           I64 => build_input_stream::<i64>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
-           U8 => build_input_stream::<u8>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
-           U16 => build_input_stream::<u16>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
-           U32 => build_input_stream::<u32>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
-           U64 => build_input_stream::<u64>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
-           F32 => build_input_stream::<f32>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
-           F64 => build_input_stream::<f64>(loopback_device, &loopback_config, sp, sample_rate, ch)?,
-           f => bail!("unsupported audio format: {:?}", f),
-        };
+        let loopback_stream = build_input_stream_with_buffer_generic(
+            loopback_device,
+            &loopback_config,
+            sp.clone(),
+            sample_rate,
+            encode_channel,
+            loopback_buffer.clone(),
+        )?;
 
         // 启动音频流
         mic_stream.play()?;
@@ -477,6 +449,7 @@ mod cpal_impl {
         Ok((Box::new(mic_stream), Arc::new(create_format_msg(sample_rate, ch as _))))
     }
 
+    #[cfg(windows)]
     fn get_mic_device() -> ResultType<(Device, SupportedStreamConfig)> {
         let audio_input = super::get_audio_input();
         let device = if !audio_input.is_empty() {
@@ -496,6 +469,46 @@ mod cpal_impl {
         Ok((device, config))
     }
 
+    #[cfg(windows)]
+    fn build_input_stream_with_buffer_auto<T>(
+        device: Device,
+        config: &SupportedStreamConfig,
+        sp: GenericService,
+        sample_rate: u32,
+        encode_channel: Channels,
+        buffer: Arc<Mutex<VecDeque<f32>>>,
+    ) -> ResultType<cpal::Stream>
+    where
+        T: cpal::SizedSample + dasp::sample::ToSample<f32>,
+    {
+        build_input_stream_with_buffer::<T>(device, config, sp, sample_rate, encode_channel, buffer)
+    }
+
+    #[cfg(windows)]
+    fn build_input_stream_with_buffer_generic(
+        device: Device,
+        config: &SupportedStreamConfig,
+        sp: GenericService,
+        sample_rate: u32,
+        encode_channel: Channels,
+        buffer: Arc<Mutex<VecDeque<f32>>>,
+    ) -> ResultType<cpal::Stream> {
+        match config.sample_format() {
+            cpal::SampleFormat::I8 => build_input_stream_with_buffer_auto::<i8>(device, config, sp, sample_rate, encode_channel, buffer),
+            cpal::SampleFormat::I16 => build_input_stream_with_buffer_auto::<i16>(device, config, sp, sample_rate, encode_channel, buffer),
+            cpal::SampleFormat::I32 => build_input_stream_with_buffer_auto::<i32>(device, config, sp, sample_rate, encode_channel, buffer),
+            cpal::SampleFormat::I64 => build_input_stream_with_buffer_auto::<i64>(device, config, sp, sample_rate, encode_channel, buffer),
+            cpal::SampleFormat::U8 => build_input_stream_with_buffer_auto::<u8>(device, config, sp, sample_rate, encode_channel, buffer),
+            cpal::SampleFormat::U16 => build_input_stream_with_buffer_auto::<u16>(device, config, sp, sample_rate, encode_channel, buffer),
+            cpal::SampleFormat::U32 => build_input_stream_with_buffer_auto::<u32>(device, config, sp, sample_rate, encode_channel, buffer),
+            cpal::SampleFormat::U64 => build_input_stream_with_buffer_auto::<u64>(device, config, sp, sample_rate, encode_channel, buffer),
+            cpal::SampleFormat::F32 => build_input_stream_with_buffer_auto::<f32>(device, config, sp, sample_rate, encode_channel, buffer),
+            cpal::SampleFormat::F64 => build_input_stream_with_buffer_auto::<f64>(device, config, sp, sample_rate, encode_channel, buffer),
+            f => bail!("unsupported audio format: {:?}", f),
+        }
+    }
+
+    #[cfg(windows)]
     fn build_input_stream_with_buffer<T>(
         device: Device,
         config: &SupportedStreamConfig,
@@ -531,6 +544,7 @@ mod cpal_impl {
         Ok(stream)
     }
 
+    #[cfg(windows)]
     fn start_mixing_thread(
         mic_buffer: Arc<Mutex<VecDeque<f32>>>,
         loopback_buffer: Arc<Mutex<VecDeque<f32>>>,
