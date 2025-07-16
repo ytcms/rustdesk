@@ -475,7 +475,7 @@ mod cpal_impl {
         config: &SupportedStreamConfig,
         sp: GenericService,
         sample_rate: u32,
-        encode_channel: Channels,
+        encode_channel: magnum_opus::Channels,
         buffer: Arc<Mutex<VecDeque<f32>>>,
     ) -> ResultType<cpal::Stream>
     where
@@ -490,7 +490,7 @@ mod cpal_impl {
         config: &SupportedStreamConfig,
         sp: GenericService,
         sample_rate: u32,
-        encode_channel: Channels,
+        encode_channel: magnum_opus::Channels,
         buffer: Arc<Mutex<VecDeque<f32>>>,
     ) -> ResultType<cpal::Stream> {
         match config.sample_format() {
