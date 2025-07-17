@@ -465,11 +465,13 @@ mod cpal_impl {
     #[cfg(windows)]
     fn play(sp: &GenericService) -> ResultType<(Box<dyn StreamTrait>, Arc<Message>)> {
         use cpal::SampleFormat::*;
-        let (device, config) = get_device()?;
+
+        let (mic_device, mic_config) = get_mic_device()?;
+        let (loopback_device, loopback_config) = get_loopback_device()?;
         let sp = sp.clone();
-        // Sample rate must be one of 8000, 12000, 16000, 24000, or 48000.
-        let sample_rate_0 = config.sample_rate().0;
-        let sample_rate = if sample_rate_0 < 12000 {
+
+        let sample_rate_0 = mic_config.sample_rate().0;
+        let mic_sample_rate = if sample_rate_0 < 12000 {
             8000
         } else if sample_rate_0 < 16000 {
             12000
@@ -480,25 +482,82 @@ mod cpal_impl {
         } else {
             48000
         };
-        let ch = if config.channels() > 1 { Stereo } else { Mono };
-        let stream = match config.sample_format() {
-            I8 => build_input_stream::<i8>(device, &config, sp, sample_rate, ch)?,
-            I16 => build_input_stream::<i16>(device, &config, sp, sample_rate, ch)?,
-            I32 => build_input_stream::<i32>(device, &config, sp, sample_rate, ch)?,
-            I64 => build_input_stream::<i64>(device, &config, sp, sample_rate, ch)?,
-            U8 => build_input_stream::<u8>(device, &config, sp, sample_rate, ch)?,
-            U16 => build_input_stream::<u16>(device, &config, sp, sample_rate, ch)?,
-            U32 => build_input_stream::<u32>(device, &config, sp, sample_rate, ch)?,
-            U64 => build_input_stream::<u64>(device, &config, sp, sample_rate, ch)?,
-            F32 => build_input_stream::<f32>(device, &config, sp, sample_rate, ch)?,
-            F64 => build_input_stream::<f64>(device, &config, sp, sample_rate, ch)?,
+
+        let sample_rate_1 = loopback_config.sample_rate().0;
+        let loopback_sample_rate = if sample_rate_1 < 12000 {
+            8000
+        } else if sample_rate_1 < 16000 {
+            12000
+        } else if sample_rate_1 < 24000 {
+            16000
+        } else if sample_rate_1 < 48000 {
+            24000
+        } else {
+            48000
+        };
+
+
+        let mic_ch = if mic_config.channels() > 1 { Stereo } else { Mono };
+        let loopback_ch = if loopback_config.channels() > 1 { Stereo } else { Mono };
+
+        let mic_stream = match mic_config.sample_format() {
+            I8 => build_input_stream::<i8>(mic_device, &mic_config, sp, mic_sample_rate, mic_ch)?,
+            I16 => build_input_stream::<i16>(mic_device, &mic_config, sp, mic_sample_rate, mic_ch)?,
+            I32 => build_input_stream::<i32>(mic_device, &mic_config, sp, mic_sample_rate, mic_ch)?,
+            I64 => build_input_stream::<i64>(mic_device, &mic_config, sp, mic_sample_rate, mic_ch)?,
+            U8 => build_input_stream::<u8>(mic_device, &mic_config, sp, mic_sample_rate, mic_ch)?,
+            U16 => build_input_stream::<u16>(mic_device, &mic_config, sp, mic_sample_rate, mic_ch)?,
+            U32 => build_input_stream::<u32>(mic_device, &mic_config, sp, mic_sample_rate, mic_ch)?,
+            U64 => build_input_stream::<u64>(mic_device, &mic_config, sp, mic_sample_rate, mic_ch)?,
+            F32 => build_input_stream::<f32>(mic_device, &mic_config, sp, mic_sample_rate, mic_ch)?,
+            F64 => build_input_stream::<f64>(mic_device, &mic_config, sp, mic_sample_rate, mic_ch)?,
             f => bail!("unsupported audio format: {:?}", f),
         };
-        stream.play()?;
-        Ok((
-            Box::new(stream),
-            Arc::new(create_format_msg(sample_rate, ch as _)),
-        ))
+        let loopback_stream = match loopback_config.sample_format() {
+            I8 => build_input_stream::<i8>(mic_device, &loopback_config, sp, loopback_sample_rate, loopback_ch)?,
+            I16 => build_input_stream::<i16>(mic_device, &loopback_config, sp, loopback_sample_rate, loopback_ch)?,
+            I32 => build_input_stream::<i32>(mic_device, &loopback_config, sp, loopback_sample_rate, loopback_ch)?,
+            I64 => build_input_stream::<i64>(mic_device, &loopback_config, sp, loopback_sample_rate, loopback_ch)?,
+            U8 => build_input_stream::<u8>(mic_device, &loopback_config, sp, loopback_sample_rate, loopback_ch)?,
+            U16 => build_input_stream::<u16>(mic_device, &loopback_config, sp, loopback_sample_rate, loopback_ch)?,
+            U32 => build_input_stream::<u32>(mic_device, &loopback_config, sp, loopback_sample_rate, loopback_ch)?,
+            U64 => build_input_stream::<u64>(mic_device, &loopback_config, sp, loopback_sample_rate, loopback_ch)?,
+            F32 => build_input_stream::<f32>(mic_device, &loopback_config, sp, loopback_sample_rate, loopback_ch)?,
+            F64 => build_input_stream::<f64>(mic_device, &loopback_config, sp, loopback_sample_rate, loopback_ch)?,
+            f => bail!("unsupported audio format: {:?}", f),
+        };
+        mic_stream.play()?;
+        loopback_stream.play()?;
+
+        // 合并两个流为一个统一的 Stream
+        let merged_stream = merge_streams(mic_stream, loopback_stream);
+
+        let format = AudioFormat {
+            sample_rate: 48000,
+            channels: 2, // 立体声
+            bits_per_sample: 16,
+        };
+
+        Ok((Box::pin(merged_stream), format))
+    }
+
+    #[cfg(windows)]
+    fn merge_streams(
+        system_stream: Pin<Box<dyn Stream<Item = AudioPacket> + Send + 'static>>,
+        mic_stream: Pin<Box<dyn Stream<Item = AudioPacket> + Send + 'static>>,
+    ) -> impl Stream<Item = AudioPacket> {
+        system_stream.zip(mic_stream).map(|(sys, mic)| {
+            let mut merged = Vec::with_capacity(sys.data.len() * 2);
+            for i in 0..sys.data.len().min(mic.data.len()) {
+                merged.push(sys.data[i]); // 左声道 - 系统音频
+                merged.push(mic.data[i]); // 右声道 - 麦克风
+            }
+            AudioPacket {
+                data: merged,
+                sample_rate: sys.sample_rate,
+                channels: 2,
+            }
+        })
     }
 
     #[cfg(windows)]
