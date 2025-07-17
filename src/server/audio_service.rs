@@ -388,78 +388,117 @@ mod cpal_impl {
         ))
     }
 
+//     #[cfg(windows)]
+//     fn play(sp: &GenericService) -> ResultType<(Box<dyn StreamTrait>, Arc<Message>)> {
+//         use cpal::SampleFormat::*;
+//
+//         // 获取麦克风设备与系统音频输出设备
+//         let (mic_device, mic_config) = get_mic_device()?;
+//         let (loopback_device, loopback_config) = get_loopback_device()?;
+//
+//         let sp = sp.clone();
+//
+//         // 统一采样率和声道数
+//         let sample_rate_0 = mic_config.sample_rate().0;
+//         let sample_rate = if sample_rate_0 < 12000 {
+//            8000
+//         } else if sample_rate_0 < 16000 {
+//            12000
+//         } else if sample_rate_0 < 24000 {
+//            16000
+//         } else if sample_rate_0 < 48000 {
+//            24000
+//         } else {
+//            48000
+//         };
+//
+//         let ch = if mic_config.channels() > 1 { Stereo } else { Mono };
+//         let encode_channel = ch;
+//
+//         // 缓冲区共享
+//         let mic_buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+//         let loopback_buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+//
+//         // 构建麦克风输入流
+//         let mic_stream = build_input_stream_with_buffer_generic(
+//             mic_device,
+//             &mic_config,
+//             sp.clone(),
+//             sample_rate,
+//             encode_channel,
+//             mic_buffer.clone(),
+//         )?;
+//
+//         // 构建系统音频输入流（loopback）
+//         let loopback_stream = build_input_stream_with_buffer_generic(
+//             loopback_device,
+//             &loopback_config,
+//             sp.clone(),
+//             sample_rate,
+//             encode_channel,
+//             loopback_buffer.clone(),
+//         )?;
+//
+//         // 启动音频流
+//         mic_stream.play()?;
+//         loopback_stream.play()?;
+//
+//         // 启动混音线程
+//         start_mixing_thread(mic_buffer, loopback_buffer, sp, sample_rate, encode_channel)?;
+//
+//         Ok((Box::new(mic_stream), Arc::new(create_format_msg(sample_rate, ch as _))))
+//     }
+//
+//     #[cfg(windows)]
+//     fn get_mic_device() -> ResultType<(Device, SupportedStreamConfig)> {
+//         let audio_input = super::get_audio_input();
+//         let device = if !audio_input.is_empty() {
+//             HOST.devices()?.find(|d| d.name().unwrap_or_default() == audio_input)
+//                 .with_context(|| "Specified mic device not found")?
+//         } else {
+//             HOST.default_input_device().context("No mic device available")?
+//         };
+//         let config = device.default_input_config()?;
+//         Ok((device, config))
+//     }
+
     #[cfg(windows)]
     fn play(sp: &GenericService) -> ResultType<(Box<dyn StreamTrait>, Arc<Message>)> {
         use cpal::SampleFormat::*;
-
-        // 获取麦克风设备与系统音频输出设备
-        let (mic_device, mic_config) = get_mic_device()?;
-        let (loopback_device, loopback_config) = get_loopback_device()?;
-
+        let (device, config) = get_device()?;
         let sp = sp.clone();
-
-        // 统一采样率和声道数
-        let sample_rate_0 = mic_config.sample_rate().0;
+        // Sample rate must be one of 8000, 12000, 16000, 24000, or 48000.
+        let sample_rate_0 = config.sample_rate().0;
         let sample_rate = if sample_rate_0 < 12000 {
-           8000
+            8000
         } else if sample_rate_0 < 16000 {
-           12000
+            12000
         } else if sample_rate_0 < 24000 {
-           16000
+            16000
         } else if sample_rate_0 < 48000 {
-           24000
+            24000
         } else {
-           48000
+            48000
         };
-
-        let ch = if mic_config.channels() > 1 { Stereo } else { Mono };
-        let encode_channel = ch;
-
-        // 缓冲区共享
-        let mic_buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
-        let loopback_buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
-
-        // 构建麦克风输入流
-        let mic_stream = build_input_stream_with_buffer_generic(
-            mic_device,
-            &mic_config,
-            sp.clone(),
-            sample_rate,
-            encode_channel,
-            mic_buffer.clone(),
-        )?;
-
-        // 构建系统音频输入流（loopback）
-        let loopback_stream = build_input_stream_with_buffer_generic(
-            loopback_device,
-            &loopback_config,
-            sp.clone(),
-            sample_rate,
-            encode_channel,
-            loopback_buffer.clone(),
-        )?;
-
-        // 启动音频流
-        mic_stream.play()?;
-        loopback_stream.play()?;
-
-        // 启动混音线程
-        start_mixing_thread(mic_buffer, loopback_buffer, sp, sample_rate, encode_channel)?;
-
-        Ok((Box::new(mic_stream), Arc::new(create_format_msg(sample_rate, ch as _))))
-    }
-
-    #[cfg(windows)]
-    fn get_mic_device() -> ResultType<(Device, SupportedStreamConfig)> {
-        let audio_input = super::get_audio_input();
-        let device = if !audio_input.is_empty() {
-            HOST.devices()?.find(|d| d.name().unwrap_or_default() == audio_input)
-                .with_context(|| "Specified mic device not found")?
-        } else {
-            HOST.default_input_device().context("No mic device available")?
+        let ch = if config.channels() > 1 { Stereo } else { Mono };
+        let stream = match config.sample_format() {
+            I8 => build_input_stream::<i8>(device, &config, sp, sample_rate, ch)?,
+            I16 => build_input_stream::<i16>(device, &config, sp, sample_rate, ch)?,
+            I32 => build_input_stream::<i32>(device, &config, sp, sample_rate, ch)?,
+            I64 => build_input_stream::<i64>(device, &config, sp, sample_rate, ch)?,
+            U8 => build_input_stream::<u8>(device, &config, sp, sample_rate, ch)?,
+            U16 => build_input_stream::<u16>(device, &config, sp, sample_rate, ch)?,
+            U32 => build_input_stream::<u32>(device, &config, sp, sample_rate, ch)?,
+            U64 => build_input_stream::<u64>(device, &config, sp, sample_rate, ch)?,
+            F32 => build_input_stream::<f32>(device, &config, sp, sample_rate, ch)?,
+            F64 => build_input_stream::<f64>(device, &config, sp, sample_rate, ch)?,
+            f => bail!("unsupported audio format: {:?}", f),
         };
-        let config = device.default_input_config()?;
-        Ok((device, config))
+        stream.play()?;
+        Ok((
+            Box::new(stream),
+            Arc::new(create_format_msg(sample_rate, ch as _)),
+        ))
     }
 
     #[cfg(windows)]
