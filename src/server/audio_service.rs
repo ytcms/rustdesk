@@ -19,7 +19,6 @@ use magnum_opus::{Application::*, Channels::*, Encoder};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::pin::Pin;
-use futures::Stream;
 
 pub const NAME: &'static str = "audio";
 pub const AUDIO_DATA_SIZE_U8: usize = 960 * 4; // 10ms in 48000 stereo
