@@ -451,18 +451,18 @@ mod cpal_impl {
 //         Ok((Box::new(mic_stream), Arc::new(create_format_msg(sample_rate, ch as _))))
 //     }
 //
-//     #[cfg(windows)]
-//     fn get_mic_device() -> ResultType<(Device, SupportedStreamConfig)> {
-//         let audio_input = super::get_audio_input();
-//         let device = if !audio_input.is_empty() {
-//             HOST.devices()?.find(|d| d.name().unwrap_or_default() == audio_input)
-//                 .with_context(|| "Specified mic device not found")?
-//         } else {
-//             HOST.default_input_device().context("No mic device available")?
-//         };
-//         let config = device.default_input_config()?;
-//         Ok((device, config))
-//     }
+    #[cfg(windows)]
+    fn get_mic_device() -> ResultType<(Device, SupportedStreamConfig)> {
+        let audio_input = super::get_audio_input();
+        let device = if !audio_input.is_empty() {
+            HOST.devices()?.find(|d| d.name().unwrap_or_default() == audio_input)
+                .with_context(|| "Specified mic device not found")?
+        } else {
+            HOST.default_input_device().context("No mic device available")?
+        };
+        let config = device.default_input_config()?;
+        Ok((device, config))
+    }
 
 
     #[derive(Clone, Debug)]
